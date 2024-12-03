@@ -39,6 +39,14 @@ def get_random_text():
     random_text = ''.join(random.choices(string.ascii_letters + string.digits, k=text_length))
     return random_text
 
+# Function to randomly select color with 80% probability of gray
+def get_random_color():
+    if random.random() < 0.8:  # 80% chance of being gray
+        gray_value = random.randint(100, 200)  # Range for gray
+        return (gray_value, gray_value, gray_value, random.randint(150, 255))  # Add alpha for transparency
+    else:  # 20% chance of being a random color
+        return (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255), random.randint(150, 255))
+
 # Function to generate a random position for watermark
 def get_random_position(width, height, obj_width, obj_height):
     if obj_width >= width or obj_height >= height:
@@ -49,20 +57,20 @@ def get_random_position(width, height, obj_width, obj_height):
 
 # Function to add watermark (text or logo) and generate mask
 def add_watermark_and_generate_mask(image_tensor, watermark_type="text"):
+    # Convert tensor to PIL Image
     image = transforms.ToPILImage()(image_tensor.cpu())
+    image = image.convert("RGBA")  # Ensure image is in RGBA mode
+    transparent_layer = Image.new('RGBA', image.size, (255, 255, 255, 0))  # Transparent layer
     mask_layer = Image.new('L', image.size, 0)  # Black background for mask
 
     width, height = image.size
 
     if watermark_type == "text":
         # Add random text
-        draw = ImageDraw.Draw(image)  # Draw text directly on the image
+        draw = ImageDraw.Draw(transparent_layer)
         mask_draw = ImageDraw.Draw(mask_layer)
         font = get_random_font()
         watermark_text = get_random_text()
-
-        # Generate random color for text
-        text_color = tuple(random.randint(0, 255) for _ in range(3))
 
         # Get text size
         textbbox = draw.textbbox((0, 0), watermark_text, font=font)
@@ -71,6 +79,7 @@ def add_watermark_and_generate_mask(image_tensor, watermark_type="text"):
         position = get_random_position(width, height, textwidth, textheight)
 
         # Draw watermark text and mask
+        text_color = get_random_color()
         draw.text(position, watermark_text, font=font, fill=text_color)
         mask_draw.text(position, watermark_text, font=font, fill=255)
 
@@ -85,29 +94,37 @@ def add_watermark_and_generate_mask(image_tensor, watermark_type="text"):
         new_logo_height = int(new_logo_width * logo_height / logo_width)
         logo = logo.resize((new_logo_width, new_logo_height), Image.Resampling.LANCZOS)
 
-        # Generate random color for logo
-        logo_color = tuple(random.randint(0, 255) for _ in range(3))
-        colored_logo = Image.new("RGBA", logo.size)
-        colored_logo.paste(logo, (0, 0), logo)
-        pixels = colored_logo.load()
+        # Extract alpha channel for transparency
+        alpha_channel = logo.split()[3]  # Get the alpha channel (透明度)
 
-        for y in range(colored_logo.height):
-            for x in range(colored_logo.width):
-                if pixels[x, y][3] > 0:  # Non-transparent pixels
-                    pixels[x, y] = (*logo_color, pixels[x, y][3])
+        # Apply random color to the non-transparent parts
+        base_layer = Image.new("RGBA", logo.size)
+        for y in range(logo.height):
+            for x in range(logo.width):
+                r, g, b, a = logo.getpixel((x, y))
+                if a > 0:  # Only modify non-transparent pixels
+                    random_color = get_random_color()  # Get random color
+                    base_layer.putpixel((x, y), (*random_color[:3], a))  # Use original alpha for transparency
+
+        # Blend the base layer with the alpha channel
+        colored_logo = Image.alpha_composite(Image.new("RGBA", logo.size, (255, 255, 255, 0)), base_layer)
 
         # Get position
         position = get_random_position(width, height, new_logo_width, new_logo_height)
 
-        # Extract the alpha channel from the resized logo (mask shape)
-        logo_mask = colored_logo.split()[3]  # The alpha channel
+        # Create a new blank layer to position the logo
+        positioned_logo = Image.new('RGBA', image.size, (255, 255, 255, 0))
+        positioned_logo.paste(colored_logo, position, alpha_channel)
 
-        # Paste the colored logo and its corresponding alpha mask onto the image and mask layers
-        image.paste(colored_logo, position, logo_mask)
-        mask_layer.paste(logo_mask, position)
+        # Paste the logo on the transparent layer and mask
+        transparent_layer = Image.alpha_composite(transparent_layer, positioned_logo)
+        mask_layer.paste(alpha_channel, position)
+
+    # Combine the original image with the transparent layer
+    watermarked_image = Image.alpha_composite(image, transparent_layer)
 
     # Convert back to tensor
-    watermarked_image = transforms.ToTensor()(image.convert("RGB")).to(device)
+    watermarked_image = transforms.ToTensor()(watermarked_image.convert("RGB")).to(device)
     mask_tensor = transforms.ToTensor()(mask_layer).to(device)
 
     return watermarked_image, mask_tensor
@@ -135,15 +152,7 @@ def process_images(input_folder, output_folder, mask_folder):
             watermarked_image, mask = add_watermark_and_generate_mask(image_tensor.squeeze(), watermark_type)
 
             # Convert tensors back to PIL Images and save
-            # Save watermarked image
-            if isinstance(watermarked_image, torch.Tensor):
-                output_image = transforms.ToPILImage()(watermarked_image.cpu())
-            else:  # If it's already a PIL Image
-                output_image = watermarked_image
-            
-            # Convert RGBA images to RGB if saving as JPEG
-            if image_file.lower().endswith(('.jpg', '.jpeg')):
-                output_image = output_image.convert("RGB")
+            output_image = transforms.ToPILImage()(watermarked_image.cpu())
             output_image.save(os.path.join(output_folder, image_file))
 
             # Save mask
