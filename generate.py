@@ -43,9 +43,9 @@ def get_random_text():
 def get_random_color():
     if random.random() < 0.8:  # 80% chance of being gray
         gray_value = random.randint(100, 200)  # Range for gray
-        return (gray_value, gray_value, gray_value, random.randint(150, 255))  # Add alpha for transparency
+        return (gray_value, gray_value, gray_value, random.randint(50, 150))  # Add alpha for transparency
     else:  # 20% chance of being a random color
-        return (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255), random.randint(150, 255))
+        return (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255), random.randint(50, 150))
 
 # Function to generate a random position for watermark
 def get_random_position(width, height, obj_width, obj_height):
@@ -88,37 +88,22 @@ def add_watermark_and_generate_mask(image_tensor, watermark_type="text"):
         logo = Image.open(os.path.join(LOGO_FOLDER, logo_path)).convert("RGBA")
         logo_width, logo_height = logo.size
 
-        # Randomly resize logo
-        scale_factor = random.uniform(0.1, 0.3)  # Resize between 10% to 30% of the image width
+        # Randomly resize logo to smaller size
+        scale_factor = random.uniform(0.05, 0.1)  # Resize between 5% to 10% of the image width
         new_logo_width = int(width * scale_factor)
         new_logo_height = int(new_logo_width * logo_height / logo_width)
         logo = logo.resize((new_logo_width, new_logo_height), Image.Resampling.LANCZOS)
-
-        # Extract alpha channel for transparency
-        alpha_channel = logo.split()[3]  # Get the alpha channel (透明度)
-
-        # Apply random color to the non-transparent parts
-        base_layer = Image.new("RGBA", logo.size)
-        for y in range(logo.height):
-            for x in range(logo.width):
-                r, g, b, a = logo.getpixel((x, y))
-                if a > 0:  # Only modify non-transparent pixels
-                    random_color = get_random_color()  # Get random color
-                    base_layer.putpixel((x, y), (*random_color[:3], a))  # Use original alpha for transparency
-
-        # Blend the base layer with the alpha channel
-        colored_logo = Image.alpha_composite(Image.new("RGBA", logo.size, (255, 255, 255, 0)), base_layer)
 
         # Get position
         position = get_random_position(width, height, new_logo_width, new_logo_height)
 
         # Create a new blank layer to position the logo
         positioned_logo = Image.new('RGBA', image.size, (255, 255, 255, 0))
-        positioned_logo.paste(colored_logo, position, alpha_channel)
+        positioned_logo.paste(logo, position, logo)
 
         # Paste the logo on the transparent layer and mask
         transparent_layer = Image.alpha_composite(transparent_layer, positioned_logo)
-        mask_layer.paste(alpha_channel, position)
+        mask_layer.paste(logo.split()[3], position)
 
     # Combine the original image with the transparent layer
     watermarked_image = Image.alpha_composite(image, transparent_layer)
@@ -128,6 +113,7 @@ def add_watermark_and_generate_mask(image_tensor, watermark_type="text"):
     mask_tensor = transforms.ToTensor()(mask_layer).to(device)
 
     return watermarked_image, mask_tensor
+
 
 
 # Process images
